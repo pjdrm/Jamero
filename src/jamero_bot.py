@@ -30,7 +30,7 @@ class JameroBot():
         chrome_options = Options()
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        #chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("--window-size=1920x1080")
         chrome_options.add_argument("--enable-javascript")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
@@ -111,20 +111,43 @@ class JameroBot():
         round_embed.set_author(name="Round "+str(n_rounds)+" status", icon_url="https://cdn4.iconfinder.com/data/icons/sports-rounded-flat/512/boxing-512.png")
         return round_embed
     
+    def get_lobby_role(self, lobby_name):
+        return '<@&475348745379119104>' #TODO: add logic to find right role to mention
+    
+    async def is_new_round(self, round_i, lobby_chan):
+        pins = await lobby_chan.pins()
+        for msg in pins:
+            if msg.author.id == self.bot.user.id:
+                embed = msg.embeds[0]
+                if embed.author.name.split(" ")[1] == str(round_i):
+                    return False, msg
+                else:
+                    return True, msg
+        return True, None
+                    
     async def check_round_status(self):
         #tourn_url = "https://silph.gg/tournaments/host/4ctb"
         #lobby_channel = self.bot.get_channel(594223228625354752)
         #n_rounds = 4
         #round_status = {1: {'IHaveLigma': 1, 'AgustinH': 0}, 2: {'DctrBanner': 0, 'FullMetalHobo': 1}, 3: {'Prolonova': 1, 'fugimaster24': 0}, 4: {'Jmillz113': 0, 'DrazenP': 1}, 5: {'ZeMota': 1, 'Ljazz7': 0}, 6: {'lrmistle': -1, 'gnomegfx': -1}, 7: {'JarramDM': 0, 'Dancobi': 1}, 8: {'Tigger226': 0, '13Malong13': 1}, 9: {'Rodiosvaldo': -1, 'Galdalf1': -1}}
         while True:
-            print("Checking Round Status")
             for lobby_chan_id in self.lobby_url_map:
                 tourn_url = self.lobby_url_map[lobby_chan_id]
                 lobby_channel = self.bot.get_channel(lobby_chan_id)
-                n_rounds, round_status = self.get_round_state(tourn_url)
-                pairings_embed = self.get_pairings_emb(n_rounds, round_status)
-                await lobby_channel.send(embed=pairings_embed)
-                await asyncio.sleep(self.check_frequency)
+                print("Round Status %s" % lobby_channel.name)
+                round_i, round_status = self.get_round_state(tourn_url)
+                pairings_embed = self.get_pairings_emb(round_i, round_status)
+                new_round, round_pin = await self.is_new_round(round_i, lobby_channel)
+                if new_round:
+                    print("Shouting new round!")
+                    await lobby_channel.send(self.get_lobby_role(lobby_channel.name)+" new round is up!")
+                    if round_pin is not None:
+                        await round_pin.delete()
+                    msg = await lobby_channel.send(embed=pairings_embed)
+                    await msg.pin()
+                else:
+                    await round_pin.edit(embed=pairings_embed)
+            await asyncio.sleep(self.check_frequency)
     
     def go_to_admin_page(self):
         admin_button_xp = '//*[@id="navbar"]/ul/li[1]/a'
