@@ -37,8 +37,10 @@ class JameroBot():
         self.browser = webdriver.Chrome(chrome_options=chrome_options, executable_path=config["chrome_driver_path"])
         self.browser.implicitly_wait(3)
         
+        self.tourn_lobby_dict = None
         self.tsr_user = config["tsr_user"]
         self.tsr_pass = config["tsr_pass"]
+        self.towns = config["towns"]
         self.log_file = log_file
         self.check_frequency = config["check_frequency"]
         self.bot_token = config["bot_token"]
@@ -111,9 +113,9 @@ class JameroBot():
         round_embed.set_author(name="Round "+str(n_rounds)+" status", icon_url="https://cdn4.iconfinder.com/data/icons/sports-rounded-flat/512/boxing-512.png")
         return round_embed
     
-    def get_lobby_role(self, lobby_name):
-        return '<@&475348745379119104>' #TODO: add logic to find right role to mention
-    
+    def get_town(self, lobby_channel_name):
+        return lobby_channel_name.split("-")[0]
+        
     async def is_new_round(self, round_i, lobby_chan):
         pins = await lobby_chan.pins()
         for msg in pins:
@@ -131,8 +133,8 @@ class JameroBot():
         #n_rounds = 4
         #round_status = {1: {'IHaveLigma': 1, 'AgustinH': 0}, 2: {'DctrBanner': 0, 'FullMetalHobo': 1}, 3: {'Prolonova': 1, 'fugimaster24': 0}, 4: {'Jmillz113': 0, 'DrazenP': 1}, 5: {'ZeMota': 1, 'Ljazz7': 0}, 6: {'lrmistle': -1, 'gnomegfx': -1}, 7: {'JarramDM': 0, 'Dancobi': 1}, 8: {'Tigger226': 0, '13Malong13': 1}, 9: {'Rodiosvaldo': -1, 'Galdalf1': -1}}
         while True:
-            for lobby_chan_id in self.lobby_url_map:
-                tourn_url = self.lobby_url_map[lobby_chan_id]
+            for lobby_chan_id in self.tourn_lobby_dict:
+                tourn_url = self.tourn_lobby_dict[lobby_chan_id]["tourn_url"]
                 lobby_channel = self.bot.get_channel(lobby_chan_id)
                 print("Round Status %s" % lobby_channel.name)
                 round_i, round_status = self.get_round_state(tourn_url)
@@ -140,7 +142,7 @@ class JameroBot():
                 new_round, round_pin = await self.is_new_round(round_i, lobby_channel)
                 if new_round:
                     print("Shouting new round!")
-                    await lobby_channel.send(self.get_lobby_role(lobby_channel.name)+" new round is up!")
+                    await lobby_channel.send(self.tourn_lobby_dict[lobby_channel.id]["tag_role"]+" new round is up!")
                     if round_pin is not None:
                         await round_pin.delete()
                     msg = await lobby_channel.send(embed=pairings_embed)
@@ -166,6 +168,24 @@ class JameroBot():
             tourn_info[tourn_name] = tourn_url
         return tourn_info
         
+    def is_tourn_lobby(self, channel_name, tourn_name):
+        if not channel_name.endswith("tcs") and\
+           not channel_name.endswith("annoucements") and\
+           channel_name in tourn_name:
+            return True
+        else:
+            return False
+    
+    def get_tourn_lobby_tag_roles(self):
+        tag_role_dict = {}
+        guild_id = self.bot.guilds[0].id #HACK: assumes bot is only in one server
+        roles = self.bot.get_guild(guild_id).roles
+        for role in roles:
+            role_name = role.name.lower()
+            if role_name in self.towns:
+                tag_role_dict[role_name] = "<@&"+str(role.id)+">"
+        return tag_role_dict
+        
     async def set_lobby_url_map(self):
         tourn_info = self.get_tourn_info()
         all_channels = {}
@@ -173,12 +193,16 @@ class JameroBot():
                 if hasattr(channel, 'send'): #hack to avoid categories
                     all_channels[channel.name] = channel.id
         
-        self.lobby_url_map = {}
-        for tourn_name in tourn_info:
+        self.tourn_lobby_dict = {}
+        tag_role_dict = self.get_tourn_lobby_tag_roles()
+        for tourn_url in tourn_info:
             for channel_name in all_channels:
-                if channel_name in tourn_name:
+                town = self.get_town(channel_name)
+                if self.is_tourn_lobby(channel_name, tourn_url):
                     chan_id = all_channels[channel_name]
-                    self.lobby_url_map[chan_id] = tourn_info[tourn_name]
+                    tag_role = tag_role_dict[town]
+                    self.tourn_lobby_dict[chan_id] = {"tourn_url": tourn_info[tourn_url],
+                                                      "tag_role": tag_role}
                     break
         
     def run_discord_bot(self):
