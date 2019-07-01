@@ -13,6 +13,7 @@ import asyncio
 import discord
 import json
 from datetime import datetime as dt
+from asyncio.tasks import sleep
 
 SA_LOGIN_PAGE = 'https://thesilphroad.com/authenticate?app=arena'
 TOURNAMENT_TYPES = {"unranked": 0, "ranked": 1, "oc": 2, "nc": 3}
@@ -48,14 +49,22 @@ class JameroBot():
         self.bot.remove_command("help")
         self.run_discord_bot()
     
-    def click_button(self, xp_query):
-        button = self.browser.find_elements_by_xpath(xp_query)[0]
-        button.click()
+    async def click_button(self, xp_query):
+        button = self.browser.find_elements_by_xpath(xp_query)
+        i = 0
+        while len(button) == 0:
+            await asyncio.sleep(1)
+            button = self.browser.find_elements_by_xpath(xp_query)
+            if i == 5:
+                print("ERROR: cant click button in %s"%self.browser.current_url)
+                return
+            i += 1
+        button[0].click()
     
     async def sa_login(self):
         self.browser.get(SA_LOGIN_PAGE)
         log_button_xp = '//*[@id="homepageContent"]/div[1]/div/a[1]'
-        self.click_button(log_button_xp)
+        await self.click_button(log_button_xp)
         actions = ActionChains(self.browser)
         actions.send_keys(self.tsr_user)
         actions.send_keys(Keys.TAB)
@@ -64,7 +73,7 @@ class JameroBot():
         actions.send_keys(Keys.ENTER)
         actions.perform()
         allow_button_xp = '/html/body/div[3]/div/div[2]/form/div/input[1]'
-        self.click_button(allow_button_xp)
+        await self.click_button(allow_button_xp)
         
     def get_round_state(self, tourn_url):
         self.browser.get(tourn_url)
@@ -126,7 +135,25 @@ class JameroBot():
                 else:
                     return True, msg
         return True, None
-                    
+    
+    async def update_lobby_round_status(self, lobby_chan_id):
+        tourn_url = self.tourn_lobby_dict[lobby_chan_id]["tourn_url"]
+        lobby_channel = self.bot.get_channel(lobby_chan_id)
+        print("Round Status %s" % lobby_channel.name)
+        round_i, round_status = self.get_round_state(tourn_url)
+        pairings_embed = self.get_pairings_emb(round_i, round_status)
+        new_round, round_pin = await self.is_new_round(round_i, lobby_channel)
+        if new_round:
+            print("Shouting new round!")
+            await lobby_channel.send(self.tourn_lobby_dict[lobby_channel.id]["tag_role"]+" new round is up!")
+            if round_pin is not None:
+                await round_pin.delete()
+            msg = await lobby_channel.send(embed=pairings_embed)
+            await msg.pin()
+        else:
+            await round_pin.edit(embed=pairings_embed)
+        return new_round
+          
     async def check_round_status(self):
         #tourn_url = "https://silph.gg/tournaments/host/4ctb"
         #lobby_channel = self.bot.get_channel(594223228625354752)
@@ -134,31 +161,17 @@ class JameroBot():
         #round_status = {1: {'IHaveLigma': 1, 'AgustinH': 0}, 2: {'DctrBanner': 0, 'FullMetalHobo': 1}, 3: {'Prolonova': 1, 'fugimaster24': 0}, 4: {'Jmillz113': 0, 'DrazenP': 1}, 5: {'ZeMota': 1, 'Ljazz7': 0}, 6: {'lrmistle': -1, 'gnomegfx': -1}, 7: {'JarramDM': 0, 'Dancobi': 1}, 8: {'Tigger226': 0, '13Malong13': 1}, 9: {'Rodiosvaldo': -1, 'Galdalf1': -1}}
         while True:
             for lobby_chan_id in self.tourn_lobby_dict:
-                tourn_url = self.tourn_lobby_dict[lobby_chan_id]["tourn_url"]
-                lobby_channel = self.bot.get_channel(lobby_chan_id)
-                print("Round Status %s" % lobby_channel.name)
-                round_i, round_status = self.get_round_state(tourn_url)
-                pairings_embed = self.get_pairings_emb(round_i, round_status)
-                new_round, round_pin = await self.is_new_round(round_i, lobby_channel)
-                if new_round:
-                    print("Shouting new round!")
-                    await lobby_channel.send(self.tourn_lobby_dict[lobby_channel.id]["tag_role"]+" new round is up!")
-                    if round_pin is not None:
-                        await round_pin.delete()
-                    msg = await lobby_channel.send(embed=pairings_embed)
-                    await msg.pin()
-                else:
-                    await round_pin.edit(embed=pairings_embed)
+                await self.update_lobby_round_status(lobby_chan_id)
             await asyncio.sleep(self.check_frequency)
     
-    def go_to_admin_page(self):
-        admin_button_xp = '//*[@id="navbar"]/ul/li[1]/a'
-        self.click_button(admin_button_xp)
+    async def go_to_admin_page(self):
+        admin_button_xp = '//*[@id="navbar"][.//*[@src="/img/icon-tournament-white.png"]]/ul/li[1]/a'
+        await self.click_button(admin_button_xp)
         comm_button_xp = '//*[@id="navbar"]/ul/li[1]/ul/li[3]'#'//*[@id="navbar"]/ul/li[1]/ul/li[2]/a'
-        self.click_button(comm_button_xp)
+        await self.click_button(comm_button_xp)
     
-    def get_tourn_info(self):
-        self.go_to_admin_page()
+    async def get_tourn_info(self):
+        await self.go_to_admin_page()
         tourn_info = {}
         ongoing_tourn_xp = '//*[@class="tournamentWrap panel panel-dark active"][.//*[@style="color:green;font-size: 16px;line-height: 7px;"]]'
         tourn_panels = self.browser.find_elements_by_xpath(ongoing_tourn_xp)
@@ -187,7 +200,7 @@ class JameroBot():
         return tag_role_dict
         
     async def set_lobby_url_map(self):
-        tourn_info = self.get_tourn_info()
+        tourn_info = await self.get_tourn_info()
         all_channels = {}
         for channel in self.bot.get_all_channels():
                 if hasattr(channel, 'send'): #hack to avoid categories
@@ -208,12 +221,23 @@ class JameroBot():
     def run_discord_bot(self):
         @self.bot.event
         async def on_ready():
-            print('UnownBot Ready')
+            print('Jamero Ready')
             await self.sa_login()
+            print('Logged in Silph Arena')
             await self.set_lobby_url_map()
-            self.bot.loop.create_task(self.check_round_status())
-        self.bot.run(self.bot_token)
+            print('Got tournament info')
+            #self.bot.loop.create_task(self.check_round_status())
+        
+        @self.bot.command(pass_context=True)
+        async def nr(ctx):
+            print("Received new round command")
+            new_round = await self.update_lobby_round_status(ctx.message.channel.id)
+            if not new_round:
+                await ctx.message.channel.send(ctx.message.author.mention+" Please do not use this command if a new round is NOT up")
             
+        self.bot.run(self.bot_token)
+        
+        
 if __name__ == "__main__":
     bot_config_path = "./jamero_cfg.json"
     with open(bot_config_path) as data_file:    
