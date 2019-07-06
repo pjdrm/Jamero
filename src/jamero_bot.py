@@ -14,7 +14,9 @@ import discord
 import json
 from datetime import datetime as dt
 from asyncio.tasks import sleep
+from lib2to3.fixer_util import String
 
+NEW_ROUND_ICON = 'https://cdn4.iconfinder.com/data/icons/sports-rounded-flat/512/boxing-512.png'
 SA_LOGIN_PAGE = 'https://thesilphroad.com/authenticate?app=arena'
 TOURNAMENT_TYPES = {"unranked": 0, "ranked": 1, "oc": 2, "nc": 3}
 MINUTE_INDEX = {0: 0, 15: 1, 30: 2, 45: 3}
@@ -42,6 +44,7 @@ class JameroBot():
         self.tsr_user = config["tsr_user"]
         self.tsr_pass = config["tsr_pass"]
         self.towns = config["towns"]
+        self.season = config["season"]
         self.log_file = log_file
         self.check_frequency = config["check_frequency"]
         self.bot_token = config["bot_token"]
@@ -49,17 +52,33 @@ class JameroBot():
         self.bot.remove_command("help")
         self.run_discord_bot()
     
-    async def click_button(self, xp_query):
+    async def click_button(self, xp_query, browser=None):
+        if browser is None:
+            browser = self.browser
         button = self.browser.find_elements_by_xpath(xp_query)
         i = 0
         while len(button) == 0:
             await asyncio.sleep(1)
-            button = self.browser.find_elements_by_xpath(xp_query)
+            button = browser.find_elements_by_xpath(xp_query)
             if i == 5:
-                print("ERROR: cant click button in %s"%self.browser.current_url)
+                print("ERROR: cant click button in %s"%browser.current_url)
                 return
             i += 1
         button[0].click()
+        
+    async def select_option(self, xp_query, option_i):
+        sel_elemns = self.browser.find_elements_by_xpath(xp_query)
+        i = 0
+        while len(sel_elemns) == 0:
+            await asyncio.sleep(1)
+            sel_elemns = self.browser.find_elements_by_xpath(xp_query)
+            if i == 5:
+                print("ERROR: cant find selection in %s"%self.browser.current_url)
+                return
+            i += 1
+        
+        options = Select(sel_elemns[0])
+        options.select_by_index(option_i)
     
     async def sa_login(self):
         self.browser.get(SA_LOGIN_PAGE)
@@ -74,6 +93,62 @@ class JameroBot():
         actions.perform()
         allow_button_xp = '/html/body/div[3]/div/div[2]/form/div/input[1]'
         await self.click_button(allow_button_xp)
+    
+    async def open_checkin(self):
+        upcoming_tourn_xp = '//*[@class="tournamentWrap panel panel-dark "][.//*[@style="color:orange;font-size: 16px;line-height: 7px;"]]'
+        next_upcoming_tourn = self.browser.find_elements_by_xpath(upcoming_tourn_xp)[0]
+        host_page_bt_xp = './/*[@class="btn btn-success"]'
+        await self.click_button(host_page_bt_xp, next_upcoming_tourn)
+        checkin_bt_xp = '//*[@id="content"]/div/div/div[2]/div/a'
+        await self.click_button(checkin_bt_xp)
+        self.browser.switch_to.alert.accept()
+        checkin_code_box_xp = '//*[@id="content"]/div[2]/div/div[3]/div/code'
+        checkin_code = self.browser.find_elements_by_xpath(checkin_code_box_xp)[0].text
+        tourn_id = self.browser.current_url.split("t/")[1][:-8]
+        return checkin_code, tourn_id
+
+    async def create_tourn(self,
+                           lobby_name,
+                           tournament_type,
+                           tourn_name,
+                           month,
+                           day,
+                           hour,
+                           min,
+                           period):
+        town = self.get_town(lobby_name)
+        tourn_name += " ("+town+" "+self.season+" - "+lobby_name.replace(town+"-", "").replace("-", " ")+")"
+        await self.go_to_admin_page()
+        host_tourn_xp = '//*[@id="content"]/div[2]/div/div/div/div/div[1]/a'
+        await self.click_button(host_tourn_xp)
+        tourn_type_options_xp = '//*[@id="TournamentTournamentTypeId"]'
+        await self.select_option(tourn_type_options_xp, TOURNAMENT_TYPES[tournament_type])
+        event_title_xp = '//*[@id="TournamentName"]'
+        event_title = self.browser.find_elements_by_xpath(event_title_xp)[0]
+        event_title.send_keys(tourn_name)
+        visible_button_xp = '//*[@id="showTournamentOnMapCheckbox"]'
+        await self.click_button(visible_button_xp)
+        month_xp = '//*[@id="TournamentStartTimeMonth"]'
+        await self.select_option(month_xp, month-1)
+        day_xp = '//*[@id="TournamentStartTimeDay"]'
+        await self.select_option(day_xp, day-1)
+        year_xp = '//*[@id="TournamentStartTimeYear"]'
+        await self.select_option(year_xp, 1) #TODO: add logic to process year
+        hour_xp = '//*[@id="TournamentStartTimeHour"]'
+        await self.select_option(hour_xp, hour-1)
+        min_xp = '//*[@id="TournamentStartTimeMin"]'
+        await self.select_option(min_xp, MINUTE_INDEX[min])
+        period_xp = '//*[@id="TournamentStartTimeMeridian"]'
+        if period == "am":
+            period = 0
+        else:
+            period = 1
+        await self.select_option(period_xp, period)
+        create_tourn_button_xp = '//*[@id="createTournamentForm"]/div[16]/button'
+        await self. click_button(create_tourn_button_xp)
+        await self.go_to_admin_page()
+        checkin_code, tourn_id = await self.open_checkin()
+        return checkin_code, tourn_id
         
     def get_round_state(self, tourn_url):
         self.browser.get(tourn_url)
@@ -119,7 +194,7 @@ class JameroBot():
                     pairings_str += res_str+"\n"
         pairings_str = pairings_str[:-1]
         round_embed.add_field(name="Pairings", value=pairings_str, inline=False)
-        round_embed.set_author(name="Round "+str(n_rounds)+" status", icon_url="https://cdn4.iconfinder.com/data/icons/sports-rounded-flat/512/boxing-512.png")
+        round_embed.set_author(name="Round "+str(n_rounds)+" status", icon_url=NEW_ROUND_ICON)
         return round_embed
     
     def get_town(self, lobby_channel_name):
@@ -167,7 +242,7 @@ class JameroBot():
     async def go_to_admin_page(self):
         admin_button_xp = '//*[@id="navbar"][.//*[@src="/img/icon-tournament-white.png"]]/ul/li[1]/a'
         await self.click_button(admin_button_xp)
-        comm_button_xp = '//*[@id="navbar"]/ul/li[1]/ul/li[3]'#'//*[@id="navbar"]/ul/li[1]/ul/li[2]/a'
+        comm_button_xp = '//*[@id="navbar"]/ul/li[1]/ul/li[2]/a'#'//*[@id="navbar"]/ul/li[1]/ul/li[3]'
         await self.click_button(comm_button_xp)
     
     async def get_tourn_info(self):
@@ -234,6 +309,35 @@ class JameroBot():
             new_round = await self.update_lobby_round_status(ctx.message.channel.id)
             if not new_round:
                 await ctx.message.channel.send(ctx.message.author.mention+" Please do not use this command if a new round is NOT up")
+                
+        @self.bot.command(pass_context=True)
+        async def ct(ctx,
+                     lobby_name: String,
+                     tournament_type: String,
+                     tourn_name: String,
+                     month: int,
+                     day: int,
+                     hour: int,
+                     min: int,
+                     period: String):
+            lobby_name = lobby_name.value  
+            tournament_type = tournament_type.value
+            tourn_name = tourn_name.value
+            period = period.value
+            if tournament_type not in TOURNAMENT_TYPES:
+                print("Invalid %s tournament_type argument" % tournament_type)
+            elif min not in MINUTE_INDEX:
+                print("Invalid %s min argument" % min)
+            else:
+                checkin_code, tourn_id = await self.create_tourn(lobby_name,
+                                                                tournament_type,
+                                                                tourn_name,
+                                                                month,
+                                                                day,
+                                                                hour,
+                                                                min,
+                                                                period)
+                await ctx.message.channel.send("Created tournament:\n\tLobby: %s\n\turl: https://silph.gg/t/%s\n\tcheck-in code: %s"%(lobby_name, tourn_id, checkin_code))
             
         self.bot.run(self.bot_token)
         
