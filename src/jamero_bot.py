@@ -341,6 +341,18 @@ class JameroBot():
             #self.bot.loop.create_task(self.check_round_status())
         
         @self.bot.command(pass_context=True)
+        async def help(ctx, cmd=None):
+            if cmd == "ct":
+                doc_str = "$ct <lobby_name> <tournament_type> <tourn_name> <date_str>\n\tdate_str: the date format is <mm>/<dd> <hh>:<mm><period>\n\nCreates a Silph Arena tournament."
+            elif cmd == "nr":
+                doc_str = "$nr\n\nAnnounces a new round is up in a tournament"
+            elif cmd is None:
+                doc_str = "Use $help <command> for more info on a command\n\n**Commands**\nct, nr"
+            else:
+                doc_str = "Unown command "+cmd
+            await ctx.message.channel.send(doc_str)
+        
+        @self.bot.command(pass_context=True)
         async def nr(ctx):
             print("Received new round command")
             new_round = await self.update_lobby_round_status(ctx.message.channel.id)
