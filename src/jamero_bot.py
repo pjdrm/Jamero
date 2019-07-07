@@ -14,11 +14,10 @@ import discord
 import json
 from datetime import datetime as dt
 from asyncio.tasks import sleep
-from lib2to3.fixer_util import String
+from selenium.common.exceptions import NoSuchElementException
 
 NEW_ROUND_ICON = 'https://cdn4.iconfinder.com/data/icons/sports-rounded-flat/512/boxing-512.png'
 SA_LOGIN_PAGE = 'https://thesilphroad.com/authenticate?app=arena'
-TOURNAMENT_TYPES = {"unranked": 0, "ranked": 1, "oc": 2, "nc": 3}
 MINUTE_INDEX = {0: 0, 15: 1, 30: 2, 45: 3}
 
 WIN_EMOJI = '✅'
@@ -51,6 +50,18 @@ class JameroBot():
         self.bot = commands.Bot(command_prefix="$", description='UnownBot')
         self.bot.remove_command("help")
         self.run_discord_bot()
+        
+    def parse_date(self, date_str):
+        try:
+            date_obj = dt.strptime(date_str, "%m/%d %I:%M%p")
+            month = int(date_obj.strftime("%m"))
+            day = int(date_obj.strftime("%d"))
+            hour = int(date_obj.strftime("%I"))
+            minute = int(date_obj.strftime("%M"))
+            period = date_obj.strftime("%p").lower()
+            return month, day, hour, minute, period
+        except ValueError:
+            return None, None, None, None, None
     
     async def click_button(self, xp_query, browser=None):
         if browser is None:
@@ -66,7 +77,7 @@ class JameroBot():
             i += 1
         button[0].click()
         
-    async def select_option(self, xp_query, option_i):
+    async def select_option_index(self, xp_query, option_i):
         sel_elemns = self.browser.find_elements_by_xpath(xp_query)
         i = 0
         while len(sel_elemns) == 0:
@@ -79,6 +90,24 @@ class JameroBot():
         
         options = Select(sel_elemns[0])
         options.select_by_index(option_i)
+        
+    async def select_option_val(self, xp_query, option_val):
+        sel_elemns = self.browser.find_elements_by_xpath(xp_query)
+        i = 0
+        while len(sel_elemns) == 0:
+            await asyncio.sleep(1)
+            sel_elemns = self.browser.find_elements_by_xpath(xp_query)
+            if i == 5:
+                print("ERROR: cant find selection in %s"%self.browser.current_url)
+                return
+            i += 1
+        
+        options = Select(sel_elemns[0])
+        try:
+            options.select_by_visible_text(option_val)
+            return 1
+        except NoSuchElementException:
+            return None
     
     async def sa_login(self):
         self.browser.get(SA_LOGIN_PAGE)
@@ -122,28 +151,30 @@ class JameroBot():
         host_tourn_xp = '//*[@id="content"]/div[2]/div/div/div/div/div[1]/a'
         await self.click_button(host_tourn_xp)
         tourn_type_options_xp = '//*[@id="TournamentTournamentTypeId"]'
-        await self.select_option(tourn_type_options_xp, TOURNAMENT_TYPES[tournament_type])
+        succ = await self.select_option_val(tourn_type_options_xp, tournament_type)
+        if succ is None: #Tournament type does not exist in page
+            return None, None
         event_title_xp = '//*[@id="TournamentName"]'
         event_title = self.browser.find_elements_by_xpath(event_title_xp)[0]
         event_title.send_keys(tourn_name)
         visible_button_xp = '//*[@id="showTournamentOnMapCheckbox"]'
         await self.click_button(visible_button_xp)
         month_xp = '//*[@id="TournamentStartTimeMonth"]'
-        await self.select_option(month_xp, month-1)
+        await self.select_option_index(month_xp, month-1)
         day_xp = '//*[@id="TournamentStartTimeDay"]'
-        await self.select_option(day_xp, day-1)
+        await self.select_option_index(day_xp, day-1)
         year_xp = '//*[@id="TournamentStartTimeYear"]'
-        await self.select_option(year_xp, 1) #TODO: add logic to process year
+        await self.select_option_index(year_xp, 1) #TODO: add logic to process year
         hour_xp = '//*[@id="TournamentStartTimeHour"]'
-        await self.select_option(hour_xp, hour-1)
+        await self.select_option_index(hour_xp, hour-1)
         min_xp = '//*[@id="TournamentStartTimeMin"]'
-        await self.select_option(min_xp, MINUTE_INDEX[min])
+        await self.select_option_index(min_xp, MINUTE_INDEX[min])
         period_xp = '//*[@id="TournamentStartTimeMeridian"]'
         if period == "am":
             period = 0
         else:
             period = 1
-        await self.select_option(period_xp, period)
+        await self.select_option_index(period_xp, period)
         create_tourn_button_xp = '//*[@id="createTournamentForm"]/div[16]/button'
         await self. click_button(create_tourn_button_xp)
         await self.go_to_admin_page()
@@ -230,10 +261,6 @@ class JameroBot():
         return new_round
           
     async def check_round_status(self):
-        #tourn_url = "https://silph.gg/tournaments/host/4ctb"
-        #lobby_channel = self.bot.get_channel(594223228625354752)
-        #n_rounds = 4
-        #round_status = {1: {'IHaveLigma': 1, 'AgustinH': 0}, 2: {'DctrBanner': 0, 'FullMetalHobo': 1}, 3: {'Prolonova': 1, 'fugimaster24': 0}, 4: {'Jmillz113': 0, 'DrazenP': 1}, 5: {'ZeMota': 1, 'Ljazz7': 0}, 6: {'lrmistle': -1, 'gnomegfx': -1}, 7: {'JarramDM': 0, 'Dancobi': 1}, 8: {'Tigger226': 0, '13Malong13': 1}, 9: {'Rodiosvaldo': -1, 'Galdalf1': -1}}
         while True:
             for lobby_chan_id in self.tourn_lobby_dict:
                 await self.update_lobby_round_status(lobby_chan_id)
@@ -256,10 +283,15 @@ class JameroBot():
             tourn_info[tourn_name] = tourn_url
         return tourn_info
         
-    def is_tourn_lobby(self, channel_name, tourn_name):
+    def is_tourn_lobby(self, channel_name):
+        split_str = channel_name.split("-")
+        if len(split_str) == 0:
+            return False
+        if split_str[0] not in self.towns:
+            return False
+        
         if not channel_name.endswith("tcs") and\
-           not channel_name.endswith("annoucements") and\
-           channel_name in tourn_name:
+           not channel_name.endswith("annoucements"):
             return True
         else:
             return False
@@ -273,21 +305,25 @@ class JameroBot():
             if role_name in self.towns:
                 tag_role_dict[role_name] = "<@&"+str(role.id)+">"
         return tag_role_dict
+    
+    async def get_tourn_lobbies(self):
+        tourn_lobbies = {}
+        for channel in self.bot.get_all_channels():
+            if hasattr(channel, 'send'): #hack to avoid categories
+                if self.is_tourn_lobby(channel.name):
+                    tourn_lobbies[channel.name] = channel.id
+        return tourn_lobbies
         
     async def set_lobby_url_map(self):
         tourn_info = await self.get_tourn_info()
-        all_channels = {}
-        for channel in self.bot.get_all_channels():
-                if hasattr(channel, 'send'): #hack to avoid categories
-                    all_channels[channel.name] = channel.id
         
         self.tourn_lobby_dict = {}
         tag_role_dict = self.get_tourn_lobby_tag_roles()
         for tourn_url in tourn_info:
-            for channel_name in all_channels:
-                town = self.get_town(channel_name)
-                if self.is_tourn_lobby(channel_name, tourn_url):
-                    chan_id = all_channels[channel_name]
+            for channel_name in self.tourn_lobbies_channels:
+                if channel_name in tourn_url:
+                    town = self.get_town(channel_name)
+                    chan_id = self.tourn_lobbies_channels[channel_name]
                     tag_role = tag_role_dict[town]
                     self.tourn_lobby_dict[chan_id] = {"tourn_url": tourn_info[tourn_url],
                                                       "tag_role": tag_role}
@@ -297,10 +333,11 @@ class JameroBot():
         @self.bot.event
         async def on_ready():
             print('Jamero Ready')
+            self.tourn_lobbies_channels = await self.get_tourn_lobbies()
             await self.sa_login()
             print('Logged in Silph Arena')
-            await self.set_lobby_url_map()
-            print('Got tournament info')
+            #await self.set_lobby_url_map()
+            #print('Got tournament info')
             #self.bot.loop.create_task(self.check_round_status())
         
         @self.bot.command(pass_context=True)
@@ -312,22 +349,27 @@ class JameroBot():
                 
         @self.bot.command(pass_context=True)
         async def ct(ctx,
-                     lobby_name: String,
-                     tournament_type: String,
-                     tourn_name: String,
-                     month: int,
-                     day: int,
-                     hour: int,
-                     min: int,
-                     period: String):
-            lobby_name = lobby_name.value  
-            tournament_type = tournament_type.value
-            tourn_name = tourn_name.value
-            period = period.value
-            if tournament_type not in TOURNAMENT_TYPES:
-                print("Invalid %s tournament_type argument" % tournament_type)
+                     lobby_name,
+                     tournament_type,
+                     tourn_name,
+                     date_str):
+            
+            if lobby_name not in self.tourn_lobbies_channels:
+                await ctx.message.channel.send("ERROR: Invalid lobby channel type `"+lobby_name+"`")
+                return
+            tournament_type = tournament_type.title()
+            month, day, hour, min, period = self.parse_date(date_str)
+            
+            if month is None:
+                await ctx.message.channel.send("ERROR: Invalid `date`. The format must be the following: `<mm>/<dd> <hh>:<mm><period>`")
             elif min not in MINUTE_INDEX:
-                print("Invalid %s min argument" % min)
+                error_msg = "ERROR: Invalid minute value in `date`. Valid minute values are: "
+                mins_list = list(MINUTE_INDEX.keys())
+                mins_list.sort()
+                for valid_min in mins_list:
+                    error_msg += str(valid_min)+", "
+                error_msg = error_msg[:-2]
+                await ctx.message.channel.send(error_msg)
             else:
                 checkin_code, tourn_id = await self.create_tourn(lobby_name,
                                                                 tournament_type,
@@ -337,7 +379,10 @@ class JameroBot():
                                                                 hour,
                                                                 min,
                                                                 period)
-                await ctx.message.channel.send("Created tournament:\n\tLobby: %s\n\turl: https://silph.gg/t/%s\n\tcheck-in code: %s"%(lobby_name, tourn_id, checkin_code))
+                if checkin_code is None: #TODO: allow handling different type of errors
+                    await ctx.message.channel.send("ERROR: Invalid tournament type `"+tournament_type+"`")
+                else:
+                    await ctx.message.channel.send("Created tournament:\n\tLobby: %s\n\turl: https://silph.gg/t/%s\n\tcheck-in code: %s"%(lobby_name, tourn_id, checkin_code))
             
         self.bot.run(self.bot_token)
         
