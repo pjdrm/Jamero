@@ -336,6 +336,14 @@ class JameroBot():
             tourn_info_dict[tourn_name] = {}
             tourn_info_dict[tourn_name]["url"] = tourn_url
             tourn_info_dict[tourn_name]["status"] = tourn_status
+            
+    def get_tourn_name(self, lobby_name, tourn_type, month):
+        town = self.get_town(lobby_name)
+        tourn_name = tourn_type.title()+ " ("+town+" "+self.season+" - "+lobby_name.replace(town+"-", "").replace("-", " ")+")"
+        if tourn_type == "freestyle":
+            month_name = datetime.date(1900, month, 1).strftime('%B')
+            tourn_name = month_name+" "+tourn_name
+        return tourn_name
     
     async def load_tourn_types(self):
             await self.go_to_admin_page()
@@ -385,12 +393,21 @@ class JameroBot():
     
     async def get_next_tourn_info(self, lobby_name):
         tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+        if tourn_pin is None:
+            return None, None
         schedule = tourn_pin.content.split("\n")[1:]
         for tourn in schedule:
             if "no link" in tourn:
                 date_str = tourn.split("(")[1].split(", no")[0]
                 tourn_type = tourn.split("** ")[1].split(" (")[0].lower()
-                return date_str, tourn_type
+                month, day, hour, min, period = self.parse_date(date_str)
+                tourn_name = self.get_tourn_name(lobby_name, tourn_type, month)
+                if tourn_name in self.tourn_lobby_dict:
+                    #Another $init_next_tourn command might already created this tournament
+                    continue
+                else:
+                    return date_str, tourn_type
+        return None, None
             
     async def update_tourn_schedule(self, lobby_name, url, checkin_code):
         found_tourn = False
@@ -459,19 +476,21 @@ class JameroBot():
         @self.bot.command(pass_context=True)
         async def init_next_tourn(ctx, lobby_name):
                 print("Got init_next_tourn command")
+                await ctx.message.add_reaction('⏳')
                 is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
                 if not is_lobby:
                     await ctx.message.channel.send(error_msg)
                     return
                 
                 date_str, tourn_type = await self.get_next_tourn_info(lobby_name)
+                if date_str is None:
+                    warn_msg = "**WARNING**: lobby `"+\
+                                lobby_name+"` does not have scheduled tournaments"
+                    await ctx.message.channel.send(warn_msg)
+                    return
+                    
                 month, day, hour, min, period = self.parse_date(date_str)
-                
-                town = self.get_town(lobby_name)
-                tourn_name = tourn_type.title()+ " ("+town+" "+self.season+" - "+lobby_name.replace(town+"-", "").replace("-", " ")+")"
-                if tourn_type == "freestyle":
-                    month_name = datetime.date(1900, month, 1).strftime('%B')
-                    tourn_name = month_name+" "+tourn_name
+                tourn_name = self.get_tourn_name(lobby_name, tourn_type, month)
                 
                 #TODO: deal with the case that init a tournament might fail.
                 '''    
@@ -482,9 +501,10 @@ class JameroBot():
                     await ctx.message.channel.send(warn_msg)
                     return
                 '''
-                
+                tourn_type = self.tourn_types[tourn_type]
+                self.add_tourn(tourn_name, None, None, None, None) #This is to prevent multiple $init_next_tourn to create multiple tournaments for the same schedule
                 checkin_code, tourn_id = await self.create_tourn(lobby_name,
-                                                                self.tourn_types[tourn_type],
+                                                                tourn_type,
                                                                 tourn_name,
                                                                 month,
                                                                 day,
@@ -498,7 +518,8 @@ class JameroBot():
                 tag_role = "TEST"#self.tag_role_dict[town]
                 self.add_tourn(tourn_name, url, lobby_chan, tag_role, "await-start")
                 await self.update_tourn_schedule(lobby_name, url, checkin_code)
-                await ctx.message.channel.send("Started %s:\n\tLobby: %s\n\turl: <%s>\n\tcheck-in code: %s"%(tourn_type, lobby_name, url, checkin_code))
+                await ctx.message.channel.send("Started %s tournament in #%s"%(tourn_type, lobby_name))
+                await ctx.message.remove_reaction('⏳', self.bot.user)
                 
         @self.bot.command(pass_context=True)
         async def clear_schedule(ctx, lobby_name):
@@ -533,7 +554,7 @@ class JameroBot():
                     
                     month, day, hour, min, period = self.parse_date(date_str)
                     if month is None:
-                        await ctx.message.channel.send("**ERROR**: Invalid `date`. The format must be the following: `<mm>/<dd> <hh>:<mm> <period> <timezone>`")
+                        await ctx.message.channel.send("**ERROR**: Invalid `date`. The format must be the following: `<month> <day>, <hh>:<mm> <period> <time zone>`")
                     elif min not in MINUTE_INDEX:
                         error_msg = "**ERROR**: Invalid minute value in `date`. Valid minute values are: "
                         mins_list = list(MINUTE_INDEX.keys())
@@ -544,7 +565,7 @@ class JameroBot():
                         await ctx.message.channel.send(error_msg)
                     else:
                         await self.add_tourn_schedule(lobby_name, tourn_type, date_str)
-                        await ctx.message.channel.send("Success! %s (%s) scheduled for %s"%(tourn_type, date_str, lobby_name))
+                        await ctx.message.channel.send("Schedule %s tournament in #%s successful"%(tourn_type.title(), lobby_name))
                     
         self.bot.run(self.bot_token)
         
