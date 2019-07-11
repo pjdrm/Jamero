@@ -68,9 +68,9 @@ class JameroBot():
             hour = int(date_obj.strftime("%I"))
             minute = int(date_obj.strftime("%M"))
             period = date_obj.strftime("%p").lower()
-            return month, day, hour, minute, period
+            return month, day, hour, minute, period, None
         except ValueError:
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, "**ERROR**: Invalid `date`. The format must be the following: `<month> <day>, <hh>:<mm> <period> <time zone>`"
     
     async def click_button(self, xp_query, browser=None):
         if browser is None:
@@ -380,7 +380,18 @@ class JameroBot():
                     break
                 
     def add_tourn(self, tourn_name, url, chan_id, tag_role, tourn_status):
-        self.tourn_lobby_dict[tourn_name] = {"url": url, "chan_id": chan_id, "tag_role": tag_role, "status": tourn_status}
+        self.tourn_lobby_dict[tourn_name] = {"url": url,
+                                             "chan_id": chan_id,
+                                             "tag_role": tag_role,
+                                             "status": tourn_status}
+        
+    def has_tourn(self, tourn_pin, lobby_name, tourn_id):
+            if tourn_pin is None:
+                return False, "**WARNING**: #%s has no schedule pin"%(lobby_name)
+            elif tourn_id not in tourn_pin.content:
+                return False, "**WARNING**: #%s has no tournament id %s"%(lobby_name, tourn_id)
+            else:
+                return True, ""
         
     async def get_tourn_schedule_pin(self, lobby_name):
         chan_id = self.tourn_lobbies_channels[lobby_name]
@@ -400,7 +411,7 @@ class JameroBot():
             if "no link" in tourn:
                 date_str = tourn.split("(")[1].split(", no")[0]
                 tourn_type = tourn.split("** ")[1].split(" (")[0].lower()
-                month, day, hour, min, period = self.parse_date(date_str)
+                month, day, hour, min, period, error_msg = self.parse_date(date_str)
                 tourn_name = self.get_tourn_name(lobby_name, tourn_type, month)
                 if tourn_name in self.tourn_lobby_dict:
                     #Another $init_next_tourn command might already created this tournament
@@ -457,11 +468,15 @@ class JameroBot():
             elif cmd == "init_next_tourn":
                 doc_str = "$init_next_tourn <lobby_name>\n\nInitiates the next tournament scheduled in a lobby by creating a Silph Arena tournament. The corresponding pin is updated in the tournament lobby."
             elif cmd == "clear_schedule":
-                doc_str = "$clear_schedule <lobby_name>\n\n Deletes the schedule pin from a tournament lobby."
+                doc_str = "$clear_schedule <lobby_name>\n\nDeletes the schedule pin from a tournament lobby."
+            elif cmd == "remove_schedule":
+                doc_str = "$remove_schedule <lobby_name> <tourn_id>\n\nRemoves the tournament with `<tourn_id>` from a lobby. The `<tourn_id>` is the number of the tournament in the schedule."
+            elif cmd == "update_schedule":
+                doc_str = "$update_schedule <lobby_name> <tourn_id> <new_date>\n\nUpdates the date of tournament with `<tourn_id>` from a lobby. The `<tourn_id>` is the number of the tournament in the schedule."
             elif cmd == "nr":
                 doc_str = "$nr\n\nAnnounces a new round is up in a tournament"
             elif cmd is None:
-                doc_str = "Use $help <command> for more info on a command\n\n**Commands**\nschedule_tourn, init_next_tourn, clear_schedule"
+                doc_str = "Use $help <command> for more info on a command\n\n**Commands**\nschedule_tourn, update_schedule, remove_schedule, clear_schedule, init_next_tourn"
             else:
                 doc_str = "Unown command "+cmd
             await ctx.message.channel.send(doc_str)
@@ -489,7 +504,7 @@ class JameroBot():
                     await ctx.message.channel.send(warn_msg)
                     return
                     
-                month, day, hour, min, period = self.parse_date(date_str)
+                month, day, hour, min, period, error_msg = self.parse_date(date_str)
                 tourn_name = self.get_tourn_name(lobby_name, tourn_type, month)
                 
                 #TODO: deal with the case that init a tournament might fail.
@@ -535,6 +550,70 @@ class JameroBot():
                     await ctx.message.channel.send("Deleted schedule pin from %s"%(lobby_name))
                 else:
                     await ctx.message.channel.send("%s has no schedule pin"%(lobby_name))
+        
+        @self.bot.command(pass_context=True)
+        async def update_schedule(ctx, lobby_name, tourn_id: str, new_date: str):
+                print("Got update_schedule command")
+                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
+                if not is_lobby:
+                    await ctx.message.channel.send(error_msg)
+                    return
+                
+                tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+                flag, error_msg = self.has_tourn(tourn_pin, lobby_name, tourn_id)
+                if not flag:
+                    await ctx.message.channel.send(error_msg)
+                else:
+                    month, day, hour, min, period, error_msg = self.parse_date(new_date)
+                    if month is None:
+                        await ctx.message.channel.send(error_msg)
+                    else:
+                        schedule = tourn_pin.content.split("\n")[1:]
+                        new_schedule = "TOURNAMENT SCHEDULE\n"
+                        for tourn in schedule:
+                            if tourn.startswith("**"+tourn_id+".**"):
+                                #**1.** Jungle Cup (July 19, 1:30 pm PDT, no link yet)
+                                #**1.** Jungle Cup (July 19, 1:30 pm PDT, http)
+                                if tourn.endswith("no link yet)"):
+                                    end_str = ", no link yet)"
+                                else:
+                                    end_str = ", http"+tourn.split("http")[1]
+                                new_schedule += tourn.split("(")[0]+"("+new_date+end_str+"\n"
+
+                            else:
+                                new_schedule += tourn+"\n"
+                        await tourn_pin.edit(content=new_schedule)
+                        await ctx.message.channel.send("Updated tournament %s from %s"%(tourn_id, lobby_name))
+        
+        @self.bot.command(pass_context=True)
+        async def remove_schedule(ctx, lobby_name, tourn_id: str):
+                print("Got remove_schedule command")
+                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
+                if not is_lobby:
+                    await ctx.message.channel.send(error_msg)
+                    return
+                
+                tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+                flag, error_msg = self.has_tourn(tourn_pin, lobby_name, tourn_id)
+                if flag:
+                    await ctx.message.channel.send(error_msg)
+                else:
+                    schedule = tourn_pin.content.split("\n")[1:]
+                    new_schedule = "TOURNAMENT SCHEDULE\n"
+                    i = 1
+                    for tourn in schedule:
+                        if tourn.startswith("**"+tourn_id+".**"):
+                            continue
+                        else:
+                            new_schedule += "**"+str(i)+".**"+tourn.split(".**")[1]+"\n"
+                            i += 1
+                            
+                    if i == 1: #There are no tournaments left
+                        await tourn_pin.delete()
+                    else:
+                        new_schedule = new_schedule[:-1]
+                        await tourn_pin.edit(content=new_schedule)
+                    await ctx.message.channel.send("Removed tournament %s from %s"%(tourn_id, lobby_name))
                     
         @self.bot.command(pass_context=True)
         async def schedule_tourn(ctx,
@@ -552,9 +631,9 @@ class JameroBot():
                         await ctx.message.channel.send(error_msg)
                         return
                     
-                    month, day, hour, min, period = self.parse_date(date_str)
+                    month, day, hour, min, period, error_msg = self.parse_date(date_str)
                     if month is None:
-                        await ctx.message.channel.send("**ERROR**: Invalid `date`. The format must be the following: `<month> <day>, <hh>:<mm> <period> <time zone>`")
+                        await ctx.message.channel.send(error_msg)
                     elif min not in MINUTE_INDEX:
                         error_msg = "**ERROR**: Invalid minute value in `date`. Valid minute values are: "
                         mins_list = list(MINUTE_INDEX.keys())
