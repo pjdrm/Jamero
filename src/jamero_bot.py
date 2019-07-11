@@ -14,6 +14,7 @@ import discord
 import json
 import pytz
 import tzlocal
+import datetime
 from datetime import datetime as dt
 from dateutil.parser import parse
 from asyncio.tasks import sleep
@@ -43,6 +44,8 @@ class JameroBot():
         self.browser.implicitly_wait(3)
         
         self.tourn_lobby_dict = None
+        self.tourn_lobbies_channels = None
+        self.tourn_types = {"freestyle": "Ranked Tournament"}
         self.local_timezone = tzlocal.get_localzone()
         self.tsr_user = config["tsr_user"]
         self.tsr_pass = config["tsr_pass"]
@@ -235,8 +238,15 @@ class JameroBot():
     def get_town(self, lobby_channel_name):
         return lobby_channel_name.split("-")[0]
     
-    def is_valid_tourn_name(self, tourn_name):
-        return True
+    def is_valid_tourn_name(self, tourn_type):
+        tourn_type = tourn_type.lower()
+        if tourn_type in self.tourn_types:
+            return True, ""
+        else:
+            error_msg = "**ERROR**: Invalid tournament type `"+tourn_type+"`. Valid types: "
+            for tourn_type in self.tourn_types:
+                error_msg += tourn_type.title()+", "
+            return False, error_msg[:-2]
         
     async def is_new_round(self, round_i, lobby_chan):
         pins = await lobby_chan.pins()
@@ -281,7 +291,7 @@ class JameroBot():
         comm_button_xp = '//*[@id="navbar"]/ul/li[1]/ul/li[2]/a'#'//*[@id="navbar"]/ul/li[1]/ul/li[3]'
         await self.click_button(comm_button_xp)
     
-    def is_tourn_lobby(self, channel_name):
+    def is_tourn_channel(self, channel_name):
         split_str = channel_name.split("-")
         if len(split_str) == 0:
             return False
@@ -293,6 +303,12 @@ class JameroBot():
             return True
         else:
             return False
+        
+    def is_tourn_lobby(self, lobby_name):
+        if lobby_name in self.tourn_lobbies_channels:
+            return True, ""
+        else:
+            return False, "**ERROR**: Invalid lobby channel `"+lobby_name+"`"
     
     def get_tourn_lobby_tag_roles(self):
         tag_role_dict = {}
@@ -308,7 +324,7 @@ class JameroBot():
         tourn_lobbies = {}
         for channel in self.bot.get_all_channels():
             if hasattr(channel, 'send'): #hack to avoid categories
-                if self.is_tourn_lobby(channel.name):
+                if self.is_tourn_channel(channel.name):
                     tourn_lobbies[channel.name] = channel.id
         return tourn_lobbies
     
@@ -320,6 +336,17 @@ class JameroBot():
             tourn_info_dict[tourn_name] = {}
             tourn_info_dict[tourn_name]["url"] = tourn_url
             tourn_info_dict[tourn_name]["status"] = tourn_status
+    
+    async def load_tourn_types(self):
+            await self.go_to_admin_page()
+            host_tourn_xp = '//*[@id="content"]/div[2]/div/div/div/div/div[1]/a'
+            await self.click_button(host_tourn_xp)
+            tourn_type_xp = '//*[@id="TournamentTournamentTypeId"]/option'
+            tourn_type_elems = self.browser.find_elements_by_xpath(tourn_type_xp)
+            for tourn_type in tourn_type_elems:
+                tourn_type = tourn_type.text
+                if tourn_type not in self.tourn_types.values():
+                    self.tourn_types[tourn_type.lower()] = tourn_type.title()
             
     async def load_tourn_info(self):
         await self.go_to_admin_page()
@@ -343,21 +370,49 @@ class JameroBot():
                     self.tourn_lobby_dict[tourn_name]["tag_role"] = tag_role
                     self.tourn_lobby_dict[tourn_name]["chan_id"] = chan_id
                     break
+                
     def add_tourn(self, tourn_name, url, chan_id, tag_role, tourn_status):
         self.tourn_lobby_dict[tourn_name] = {"url": url, "chan_id": chan_id, "tag_role": tag_role, "status": tourn_status}
         
-    async def get_tourn_schedule_pin(self, lobby_chan):
+    async def get_tourn_schedule_pin(self, lobby_name):
+        chan_id = self.tourn_lobbies_channels[lobby_name]
+        lobby_chan = self.bot.get_channel(chan_id)
         pins = await lobby_chan.pins()
         for msg in pins:
             if msg.content.startswith("TOURNAMENT SCHEDULE"):
                 return msg
         return None
+    
+    async def get_next_tourn_info(self, lobby_name):
+        tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+        schedule = tourn_pin.content.split("\n")[1:]
+        for tourn in schedule:
+            if "no link" in tourn:
+                date_str = tourn.split("(")[1].split(", no")[0]
+                tourn_type = tourn.split("** ")[1].split(" (")[0].lower()
+                return date_str, tourn_type
             
-    async def add_tounr_schedule(self, lobby_chan, turn_type, date_str):
-        tourn_schedule_pin = await self.get_tourn_schedule_pin(lobby_chan)
-        new_tourn_str = turn_type+" ("+date_str+", no link yet)"
+    async def update_tourn_schedule(self, lobby_name, url, checkin_code):
+        found_tourn = False
+        updated_schedule = ""
+        tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+        schedule = tourn_pin.content.split("\n")
+        for tourn in schedule:
+            if "no link" in tourn and not found_tourn:
+                updated_schedule += tourn.replace(", no link yet", "")+" ("+url+", check-in code: "+checkin_code+")\n"
+                found_tourn = True
+            else:
+                updated_schedule += tourn+"\n"
+        updated_schedule = updated_schedule[:-1]
+        await tourn_pin.edit(content=updated_schedule)
+    
+    async def add_tourn_schedule(self, lobby_name, turn_type, date_str):
+        tourn_schedule_pin = await self.get_tourn_schedule_pin(lobby_name)
+        new_tourn_str = turn_type.title()+" ("+date_str+", no link yet)"
         if tourn_schedule_pin is None:
             new_schedule = "TOURNAMENT SCHEDULE\n**1.** "+new_tourn_str
+            chan_id = self.tourn_lobbies_channels[lobby_name]
+            lobby_chan = self.bot.get_channel(chan_id)
             msg = await lobby_chan.send(new_schedule)
             await msg.pin()
         else:
@@ -370,20 +425,26 @@ class JameroBot():
         async def on_ready():
             print('Jamero Ready')
             self.tourn_lobbies_channels = await self.get_tourn_lobbies()
-            #await self.sa_login()
+            await self.sa_login()
             print('Logged in Silph Arena')
-            #await self.set_lobby_url_map()
+            await self.load_tourn_types()
+            print('Loaded tournament types')
+            await self.set_lobby_url_map()
             print('Got tournament info')
             #self.bot.loop.create_task(self.check_round_status())
         
         @self.bot.command(pass_context=True)
         async def help(ctx, cmd=None):
-            if cmd == "ct":
-                doc_str = "$ct <lobby_name> <tournament_type> <tourn_name> <date_str>\n\tdate_str: the date format is <mm>/<dd> <hh>:<mm><period>\n\nCreates a Silph Arena tournament."
+            if cmd == "schedule_tourn":
+                doc_str = "$schedule_tourn <lobby_name> <tournament_type> <date_str>\n\tdate_str: the date format is `<month> <day>, <hh>:<mm> <period> <time zone>`\n\nAdds a tournament to the schedule pin of the lobby."
+            elif cmd == "init_next_tourn":
+                doc_str = "$init_next_tourn <lobby_name>\n\nInitiates the next tournament scheduled in a lobby by creating a Silph Arena tournament. The corresponding pin is updated in the tournament lobby."
+            elif cmd == "clear_schedule":
+                doc_str = "$clear_schedule <lobby_name>\n\n Deletes the schedule pin from a tournament lobby."
             elif cmd == "nr":
                 doc_str = "$nr\n\nAnnounces a new round is up in a tournament"
             elif cmd is None:
-                doc_str = "Use $help <command> for more info on a command\n\n**Commands**\nct, nr"
+                doc_str = "Use $help <command> for more info on a command\n\n**Commands**\nschedule_tourn, init_next_tourn, clear_schedule"
             else:
                 doc_str = "Unown command "+cmd
             await ctx.message.channel.send(doc_str)
@@ -394,19 +455,80 @@ class JameroBot():
             new_round = await self.update_lobby_round_status(ctx.message.channel.id)
             if not new_round:
                 await ctx.message.channel.send(ctx.message.author.mention+" Please do not use this command if a new round is NOT up")
+        
+        @self.bot.command(pass_context=True)
+        async def init_next_tourn(ctx, lobby_name):
+                print("Got init_next_tourn command")
+                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
+                if not is_lobby:
+                    await ctx.message.channel.send(error_msg)
+                    return
                 
+                date_str, tourn_type = await self.get_next_tourn_info(lobby_name)
+                month, day, hour, min, period = self.parse_date(date_str)
+                
+                town = self.get_town(lobby_name)
+                tourn_name = tourn_type.title()+ " ("+town+" "+self.season+" - "+lobby_name.replace(town+"-", "").replace("-", " ")+")"
+                if tourn_type == "freestyle":
+                    month_name = datetime.date(1900, month, 1).strftime('%B')
+                    tourn_name = month_name+" "+tourn_name
+                
+                #TODO: deal with the case that init a tournament might fail.
+                '''    
+                if tourn_name in  self.tourn_lobby_dict:
+                    warn_msg = "**WARNING**: tournament `"+\
+                                tourn_name+"` already exists and was **NOT** created: <"+\
+                                self.tourn_lobby_dict[tourn_name]["url"]+">"
+                    await ctx.message.channel.send(warn_msg)
+                    return
+                '''
+                
+                checkin_code, tourn_id = await self.create_tourn(lobby_name,
+                                                                self.tourn_types[tourn_type],
+                                                                tourn_name,
+                                                                month,
+                                                                day,
+                                                                hour,
+                                                                min,
+                                                                period)
+
+                chan_id = self.tourn_lobbies_channels[lobby_name]
+                lobby_chan = self.bot.get_channel(chan_id)
+                url = "https://silph.gg/t/"+tourn_id
+                tag_role = "TEST"#self.tag_role_dict[town]
+                self.add_tourn(tourn_name, url, lobby_chan, tag_role, "await-start")
+                await self.update_tourn_schedule(lobby_name, url, checkin_code)
+                await ctx.message.channel.send("Started %s:\n\tLobby: %s\n\turl: <%s>\n\tcheck-in code: %s"%(tourn_type, lobby_name, url, checkin_code))
+                
+        @self.bot.command(pass_context=True)
+        async def clear_schedule(ctx, lobby_name):
+                print("Got clear_schedule command")
+                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
+                if not is_lobby:
+                    await ctx.message.channel.send(error_msg)
+                    return
+                
+                tourn_schedule_pin = await self.get_tourn_schedule_pin(lobby_name)
+                if tourn_schedule_pin is not None:
+                    await tourn_schedule_pin.delete()
+                    await ctx.message.channel.send("Deleted schedule pin from %s"%(lobby_name))
+                else:
+                    await ctx.message.channel.send("%s has no schedule pin"%(lobby_name))
+                    
         @self.bot.command(pass_context=True)
         async def schedule_tourn(ctx,
                                  lobby_name,
-                                 tourn_name,
+                                 tourn_type,
                                  date_str): #$schedule_tourn pallet-rising-star-2 "Freestyle" "July 7, 05:00 pm PDT"
                     print("Got schedule_tourn command")
-                    if lobby_name not in self.tourn_lobbies_channels:
-                        await ctx.message.channel.send("**ERROR**: Invalid lobby channel `"+lobby_name+"`")
+                    is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
+                    if not is_lobby:
+                        await ctx.message.channel.send(error_msg)
                         return
                     
-                    if not self.is_valid_tourn_name(tourn_name):
-                        await ctx.message.channel.send("**ERROR**: Invalid tournament name `"+tourn_name+"`")
+                    is_valid_tourn, error_msg = self.is_valid_tourn_name(tourn_type)
+                    if not is_valid_tourn:
+                        await ctx.message.channel.send(error_msg)
                         return
                     
                     month, day, hour, min, period = self.parse_date(date_str)
@@ -421,67 +543,9 @@ class JameroBot():
                         error_msg = error_msg[:-2]
                         await ctx.message.channel.send(error_msg)
                     else:
-                        chan_id = self.tourn_lobbies_channels[lobby_name]
-                        lobby_chan = self.bot.get_channel(chan_id)
-                        await self.add_tounr_schedule(lobby_chan, tourn_name, date_str)
-                        await ctx.message.channel.send("Success! %s (%s) scheduled for %s"%(tourn_name, date_str, lobby_name))
+                        await self.add_tourn_schedule(lobby_name, tourn_type, date_str)
+                        await ctx.message.channel.send("Success! %s (%s) scheduled for %s"%(tourn_type, date_str, lobby_name))
                     
-        @self.bot.command(pass_context=True)
-        async def ct(ctx,
-                     lobby_name,
-                     tournament_type,
-                     tourn_name,
-                     date_str):
-            print("Got create tournament command")
-            if lobby_name not in self.tourn_lobbies_channels:
-                await ctx.message.channel.send("**ERROR**: Invalid lobby channel `"+lobby_name+"`")
-                return
-            tournament_type = tournament_type.title()
-            month, day, hour, min, period = self.parse_date(date_str)
-            
-            if month is None:
-                await ctx.message.channel.send("**ERROR**: Invalid `date`. The format must be the following: `<mm>/<dd> <hh>:<mm><period>`")
-            elif min not in MINUTE_INDEX:
-                error_msg = "**ERROR**: Invalid minute value in `date`. Valid minute values are: "
-                mins_list = list(MINUTE_INDEX.keys())
-                mins_list.sort()
-                for valid_min in mins_list:
-                    error_msg += str(valid_min)+", "
-                error_msg = error_msg[:-2]
-                await ctx.message.channel.send(error_msg)
-            else:
-                town = self.get_town(lobby_name)
-                tourn_name += " ("+town+" "+self.season+" - "+lobby_name.replace(town+"-", "").replace("-", " ")+")"
-                '''
-                if tourn_name in  self.tourn_lobby_dict:
-                    warn_msg = "**WARNING**: tournament `"+\
-                                tourn_name+"` already exists and was **NOT** created: <"+\
-                                self.tourn_lobby_dict[tourn_name]["url"]+">"
-                    await ctx.message.channel.send(warn_msg)
-                    return
-                
-                checkin_code, tourn_id = await self.create_tourn(lobby_name,
-                                                                tournament_type,
-                                                                tourn_name,
-                                                                month,
-                                                                day,
-                                                                hour,
-                                                                min,
-                                                                period)
-                '''
-                checkin_code = "test"
-                tourn_id = "test"
-                if checkin_code is None: #TODO: allow handling different type of errors
-                    await ctx.message.channel.send("**ERROR**: Invalid tournament type `"+tournament_type+"`")
-                else:
-                    chan_id = self.tourn_lobbies_channels[lobby_name]
-                    lobby_chan = self.bot.get_channel(chan_id)
-                    url = "https://silph.gg/t/"+tourn_id
-                    tag_role = "TEST"#self.tag_role_dict[town]
-                    #self.add_tourn(tourn_name, url, lobby_chan, tag_role, "await-start")
-                    await self.update_tounr_schedule(lobby_chan, tournament_type, date_str, url, checkin_code)
-                    await ctx.message.channel.send("Created tournament:\n\tLobby: %s\n\turl: <%s>\n\tcheck-in code: %s"%(lobby_name, url, checkin_code))
-            
         self.bot.run(self.bot_token)
         
         
