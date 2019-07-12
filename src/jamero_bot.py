@@ -9,6 +9,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.select import Select
 from discord.ext import commands
+import sys
 import asyncio
 import discord
 import json
@@ -481,6 +482,7 @@ class JameroBot():
             print('Jamero connected to Discord')
             if self.tourn_lobbies_channels is None:
                 self.tourn_lobbies_channels =  await self.get_tourn_lobbies()
+                print("Lobby channels: %s"%(str(self.tourn_lobbies_channels)))
                 self.set_lobby_url_map()
                 print('Got tournament info')
             #self.bot.loop.create_task(self.check_round_status())
@@ -746,6 +748,9 @@ class JameroBot():
         
 if __name__ == "__main__":
     bot_config_path = "./jamero_cfg.json"
+    if len(sys.argv) == 2:
+        bot_config_path = sys.argv[1]
+        
     with open(bot_config_path) as data_file:    
         bot_config = json.load(data_file)
     JameroBot(bot_config)

@@ -1,0 +1,9 @@
+{
+	"tsr_user": "REDDIT_USER",
+	"tsr_pass": "PASSWORD",
+	"check_frequency": 3600,
+	"bot_token": "BOT_TOKEN",
+	"chrome_driver_path": "DRIVER_PATH",
+	"towns": ["pallet", "cerulean"],
+	"season": "s2"
+}
