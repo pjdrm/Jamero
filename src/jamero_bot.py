@@ -406,13 +406,13 @@ class JameroBot():
                                              "tag_role": tag_role,
                                              "status": tourn_status}
         
-    def has_tourn(self, tourn_pin, lobby_name, tourn_id):
+    def has_tourn(self, tourn_pin, tourn_id):
             if tourn_pin is None:
-                return False, "**WARNING**: #%s has no schedule pin"%(lobby_name)
+                return False
             elif tourn_id not in tourn_pin.content:
-                return False, "**WARNING**: #%s has no tournament id %s"%(lobby_name, tourn_id)
+                return False
             else:
-                return True, ""
+                return True
         
     async def get_tourn_schedule_pin(self, lobby_name):
         chan_id = self.tourn_lobbies_channels[lobby_name]
@@ -603,21 +603,29 @@ class JameroBot():
                     await ctx.message.channel.send(warning_msg)
         
         @self.bot.command(pass_context=True)
-        async def update_schedule(ctx, lobby_name, tourn_id: str, new_date: str):
+        async def update_schedule(ctx, lobby_list_str, tourn_id: str, new_date: str):
                 print("Got update_schedule command")
-                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
-                if not is_lobby:
+                lobby_list, error_msg = self.parse_lobby_list(lobby_list_str)
+                if lobby_list is None:
                     await ctx.message.channel.send(error_msg)
                     return
                 
-                tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
-                flag, error_msg = self.has_tourn(tourn_pin, lobby_name, tourn_id)
-                if not flag:
+                month, day, hour, min, period, error_msg = self.parse_date(new_date)
+                if month is None:
                     await ctx.message.channel.send(error_msg)
-                else:
-                    month, day, hour, min, period, error_msg = self.parse_date(new_date)
-                    if month is None:
-                        await ctx.message.channel.send(error_msg)
+                    return
+                
+                warn_msg = "**WARNING**: "
+                warn_flag = False
+                i = 1
+                n = len(lobby_list)
+                update_msg = None
+                for lobby_name in lobby_list:
+                    tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+                    flag = self.has_tourn(tourn_pin, tourn_id)
+                    if not flag:
+                        warn_flag = True
+                        warn_msg += lobby_name+", "
                     else:
                         schedule = tourn_pin.content.split("\n")[1:]
                         new_schedule = "TOURNAMENT SCHEDULE\n"
@@ -632,37 +640,61 @@ class JameroBot():
                             else:
                                 new_schedule += tourn+"\n"
                         await tourn_pin.edit(content=new_schedule)
-                        await ctx.message.channel.send("Updated tournament %s from %s"%(tourn_id, lobby_name))
+                        msg_str = "Updated tournament %s from %s (%d/%d)"%(tourn_id, lobby_name, i, n)
+                        if update_msg is None:
+                            update_msg = await ctx.message.channel.send(msg_str)
+                        else:
+                            await update_msg.edit(content=msg_str)
+                        i += 1
+                        
+                if warn_flag:
+                    await ctx.message.channel.send(warn_msg[:-2]+" do have tournament id `"+tourn_id+".`")
         
         @self.bot.command(pass_context=True)
-        async def remove_schedule(ctx, lobby_name, tourn_id: str):
+        async def remove_schedule(ctx, lobby_list_str, tourn_id: str):
                 print("Got remove_schedule command")
-                is_lobby, error_msg = self.is_tourn_lobby(lobby_name)
-                if not is_lobby:
+                lobby_list, error_msg = self.parse_lobby_list(lobby_list_str)
+                if lobby_list is None:
                     await ctx.message.channel.send(error_msg)
                     return
                 
-                tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
-                flag, error_msg = self.has_tourn(tourn_pin, lobby_name, tourn_id)
-                if flag:
-                    await ctx.message.channel.send(error_msg)
-                else:
-                    schedule = tourn_pin.content.split("\n")[1:]
-                    new_schedule = "TOURNAMENT SCHEDULE\n"
-                    i = 1
-                    for tourn in schedule:
-                        if tourn.startswith("**"+tourn_id+".**"):
-                            continue
-                        else:
-                            new_schedule += "**"+str(i)+".**"+tourn.split(".**")[1]+"\n"
-                            i += 1
-                            
-                    if i == 1: #There are no tournaments left
-                        await tourn_pin.delete()
+                warn_msg = "**WARNING**: "
+                warn_flag = False
+                j = 1
+                n = len(lobby_list)
+                update_msg = None
+                for lobby_name in lobby_list_str:
+                    tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+                    flag = self.has_tourn(tourn_pin, tourn_id)
+                    if flag:
+                        warn_flag = True
+                        warn_msg += lobby_name+", "
                     else:
-                        new_schedule = new_schedule[:-1]
-                        await tourn_pin.edit(content=new_schedule)
-                    await ctx.message.channel.send("Removed tournament %s from %s"%(tourn_id, lobby_name))
+                        schedule = tourn_pin.content.split("\n")[1:]
+                        new_schedule = "TOURNAMENT SCHEDULE\n"
+                        i = 1
+                        for tourn in schedule:
+                            if tourn.startswith("**"+tourn_id+".**"):
+                                continue
+                            else:
+                                new_schedule += "**"+str(i)+".**"+tourn.split(".**")[1]+"\n"
+                                i += 1
+                                
+                        if i == 1: #There are no tournaments left
+                            await tourn_pin.delete()
+                        else:
+                            new_schedule = new_schedule[:-1]
+                            await tourn_pin.edit(content=new_schedule)
+                        
+                        msg_str = "Removed tournament %s from %s (%d/%d)"%(tourn_id, lobby_name, j, n)
+                        if update_msg is None:
+                            update_msg = await ctx.message.channel.send(msg_str)
+                        else:
+                            await update_msg.edit(content=msg_str)
+                        j += 1
+                
+                if warn_flag:
+                    await ctx.message.channel.send(warn_msg[:-2]+" do have tournament id `"+tourn_id+".`")
                     
         @self.bot.command(pass_context=True)
         async def schedule_tourn(ctx,
