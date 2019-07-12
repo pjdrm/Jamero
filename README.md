@@ -14,4 +14,4 @@ Go Stadium Tournament Manager
 **Notes:**
 - Please make sure your chrome driver version matches you chrome browser.
 - Check the `jamero_cfg.json.example` file for a configuration example.
-- The `<config_path>`is optional. The default path is `./jamero_cfg.json`
+- The `<config_path>`argument is optional. The default path is `./jamero_cfg.json`
