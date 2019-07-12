@@ -8,4 +8,10 @@ Go Stadium Tournament Manager
 ## Instalation
 `pip3 install -r requirements.txt --upgrade`
 
-**Note**: please make sure your chrome driver version matches you chrome browser.
+## Running
+`python3 src/jamero_bot.py <config_path>`
+
+**Notes:**
+- Please make sure your chrome driver version matches you chrome browser.
+- Check the `jamero_cfg.json.example` file for a configuration example.
+- The `<config_path>`is optional. The default path is `./jamero_cfg.json`
