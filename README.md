@@ -7,6 +7,7 @@ Go Stadium Tournament Manager
 
 ## Instalation
 `pip install -U git+https://github.com/Rapptz/discord.py@rewrite`
+
 `pip3 install -r requirements.txt --upgrade`
 
 ## Running
