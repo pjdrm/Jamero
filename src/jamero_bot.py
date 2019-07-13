@@ -29,6 +29,7 @@ WIN_EMOJI = '✅'
 LOSS_EMOJI = '❌'
 GLOVE_EMOJI = '🥊'
 SIDEBAR_EMBED_COLOR = 0x5c7ce5
+TOURN_SCHE_HEADER = "**TOURNAMENT SCHEDULE**"
 
 class JameroBot():
     
@@ -46,7 +47,7 @@ class JameroBot():
         
         self.tourn_lobby_dict = None
         self.tourn_lobbies_channels = None
-        self.tourn_types = {"freestyle": "Ranked Tournament"}
+        self.tourn_types = {"freestyle": "Ranked Tournament", "kingdom cup": "Kingdom Cup", "nightmare cup": "Nightmare Cup"}
         self.local_timezone = tzlocal.get_localzone()
         self.tsr_user = config["tsr_user"]
         self.tsr_pass = config["tsr_pass"]
@@ -337,6 +338,45 @@ class JameroBot():
             return True, ""
         else:
             return False, "**ERROR**: Invalid lobby channel `"+lobby_name+"`"
+        
+    def is_valid_schedule(self, tourn_pin_str):
+        try:
+            split_str = tourn_pin_str.split("\n")
+            if split_str[0] != TOURN_SCHE_HEADER:
+                return False
+            for i, tourn in enumerate(split_str[1:]):
+                tourn = tourn.replace("*", "")
+                turn_id = tourn.split(" ")[0][:-1]
+                if str(i+1) != turn_id:
+                    return False
+                
+                tourn_type = tourn.split(". ")[1].split(" (")[0].lower()
+                if tourn_type not in self.tourn_types:
+                    return False
+                
+                if ", no link yet)" in tourn:
+                    ##**7. Jungle Cup** (July 14, 1:30 pm PDT, no link yet)
+                    date_str = tourn.split("(")[1].split(", no link yet)")[0]
+                    month, day, hour, min, period, error_msg = self.parse_date(date_str)
+                    if month is None:
+                        return False
+                    else:
+                        return True
+                elif "check-in code:" in tourn:
+                    #**6. Freestyle** (July 7, 1:30 pm PDT) (<https://silph.gg/t/drgm/>, check-in code: **5864**)
+                    date_str = tourn.split("(")[1].split(")")
+                    month, day, hour, min, period, error_msg = self.parse_date(date_str)
+                    if month is None:
+                        return False
+                    else:
+                        return True
+                elif "http" in tourn:    
+                    #**5. Rainbow Cup** (<https://silph.gg/t/wuv9/>)
+                    return True
+                else:
+                    return False
+        except ValueError:
+            return False
     
     def get_tourn_lobby_tag_roles(self):
         tag_role_dict = {}
@@ -423,10 +463,11 @@ class JameroBot():
         
     async def get_tourn_schedule_pin(self, lobby_name):
         chan_id = self.tourn_lobbies_channels[lobby_name]
-        lobby_chan = self.bot.get_channel(chan_id)
+        lobby_chan = self.bot.get_channel(chan_id) #TODO: index channel objects
         pins = await lobby_chan.pins()
         for msg in pins:
-            if msg.content.startswith("TOURNAMENT SCHEDULE"):
+            if msg.content.startswith(TOURN_SCHE_HEADER)\
+               and msg.author.id == self.bot.user.id:
                 return msg
         return None
     
@@ -455,7 +496,7 @@ class JameroBot():
         schedule = tourn_pin.content.split("\n")
         for tourn in schedule:
             if "no link" in tourn and not found_tourn:
-                updated_schedule += tourn.replace(", no link yet", "")+" ("+url+", check-in code: "+checkin_code+")\n"
+                updated_schedule += tourn.replace(", no link yet", "")+" ("+url+", check-in code: **"+checkin_code+"**)\n"
                 found_tourn = True
             else:
                 updated_schedule += tourn+"\n"
@@ -464,16 +505,16 @@ class JameroBot():
     
     async def add_tourn_schedule(self, lobby_name, turn_type, date_str):
         tourn_schedule_pin = await self.get_tourn_schedule_pin(lobby_name)
-        new_tourn_str = turn_type.title()+" ("+date_str+", no link yet)"
+        new_tourn_str = turn_type.title()+"** ("+date_str+", no link yet)"
         if tourn_schedule_pin is None:
-            new_schedule = "TOURNAMENT SCHEDULE\n**1.** "+new_tourn_str
+            new_schedule = TOURN_SCHE_HEADER+"\n**1. "+new_tourn_str
             chan_id = self.tourn_lobbies_channels[lobby_name]
             lobby_chan = self.bot.get_channel(chan_id)
             msg = await lobby_chan.send(new_schedule)
             await msg.pin()
         else:
             n_tourn = len(tourn_schedule_pin.content.split("\n"))
-            new_schedule =tourn_schedule_pin.content+"\n**"+str(n_tourn)+".** "+new_tourn_str
+            new_schedule =tourn_schedule_pin.content+"\n**"+str(n_tourn)+". "+new_tourn_str
             await tourn_schedule_pin.edit(content=new_schedule)
         
     def run_discord_bot(self):
@@ -482,7 +523,6 @@ class JameroBot():
             print('Jamero connected to Discord')
             if self.tourn_lobbies_channels is None:
                 self.tourn_lobbies_channels =  await self.get_tourn_lobbies()
-                print("Lobby channels: %s"%(str(self.tourn_lobbies_channels)))
                 self.set_lobby_url_map()
                 print('Got tournament info')
             #self.bot.loop.create_task(self.check_round_status())
@@ -561,7 +601,7 @@ class JameroBot():
     
                     chan_id = self.tourn_lobbies_channels[lobby_name]
                     lobby_chan = self.bot.get_channel(chan_id)
-                    url = "https://silph.gg/t/"+tourn_id
+                    url = "<https://silph.gg/t/"+tourn_id+">"
                     tag_role = "TEST"#self.tag_role_dict[town]
                     self.add_tourn(tourn_name, url, lobby_chan, tag_role, "await-start")
                     await self.update_tourn_schedule(lobby_name, url, checkin_code)
@@ -633,7 +673,7 @@ class JameroBot():
                         warn_msg += lobby_name+", "
                     else:
                         schedule = tourn_pin.content.split("\n")[1:]
-                        new_schedule = "TOURNAMENT SCHEDULE\n"
+                        new_schedule = TOURN_SCHE_HEADER+"\n"
                         for tourn in schedule:
                             if tourn.startswith("**"+tourn_id+".**"):
                                 if tourn.endswith("no link yet)"):
@@ -676,7 +716,7 @@ class JameroBot():
                         warn_msg += lobby_name+", "
                     else:
                         schedule = tourn_pin.content.split("\n")[1:]
-                        new_schedule = "TOURNAMENT SCHEDULE\n"
+                        new_schedule = TOURN_SCHE_HEADER+"\n"
                         i = 1
                         for tourn in schedule:
                             if tourn.startswith("**"+tourn_id+".**"):
@@ -742,6 +782,44 @@ class JameroBot():
                         else:
                             await progress_msg.edit(content=msg_str)
                         i += 1
+                        
+        @self.bot.command(pass_context=True)
+        async def import_schedules(ctx):
+                print("Got import_schedules command")
+                warn_msg = "**WARNING:** Could not find schedule pin for lobbies: "
+                warn_flag = False
+                i = 1
+                n = len(self.tourn_lobbies_channels)
+                progress_msg = None
+                for lobby_name in self.tourn_lobbies_channels:
+                    tourn_pin = await self.get_tourn_schedule_pin(lobby_name)
+                    if tourn_pin is not None:#Already imported this lobby
+                        continue
+                    chan_id = self.tourn_lobbies_channels[lobby_name]
+                    lobby_chan = self.bot.get_channel(chan_id) #TODO: index channel objects
+                    pins = await lobby_chan.pins()
+                    found_pin = False
+                    for msg in pins:
+                        if msg.content.startswith(TOURN_SCHE_HEADER):
+                            if self.is_valid_schedule(msg.content):
+                                chan_id = self.tourn_lobbies_channels[lobby_name]
+                                lobby_chan = self.bot.get_channel(chan_id)
+                                jamero_msg = await lobby_chan.send(msg.content)
+                                await jamero_msg.pin()
+                                found_pin = True
+                                break
+                    if not found_pin:
+                        warn_flag = True
+                        warn_msg += lobby_name+", "
+                    
+                    msg_str = "Import of tournament schedule for #%s (%d/%d)"%(lobby_name, i, n)
+                    if progress_msg is None:
+                        progress_msg = await ctx.message.channel.send(msg_str)
+                    else:
+                        await progress_msg.edit(content=msg_str)
+                    i += 1
+                if warn_flag:
+                    await ctx.message.channel.send(warn_msg[:-2])
                     
         self.bot.run(self.bot_token)
         
